@@ -1,0 +1,6 @@
+#!/bin/sh
+
+rm -f ~/.config
+rm -rf ~/.cache
+rm -rf ~/.local
+rm -rf ~/.terminfo

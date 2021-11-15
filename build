@@ -1,0 +1,312 @@
+#!/bin/sh
+
+set -ue
+
+# A collection of shell scripts for installing some libraries/packages in
+# user namespaces (e.g. ~/.local/), without having root privileges.
+
+lowercase() {
+  echo "$1" | sed "y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/"
+}
+
+narg() { echo $#; }
+
+cleanup() {
+  trap - INT QUIT TERM EXIT ILL PIPE
+  cd /
+  if ! rm -rf -- "$WRKDIR"; then
+    sleep 5
+    rm -rf -- "$WRKDIR"
+  fi
+}
+
+sed_i() {
+  [ $# -gt 1 ]
+  local script="$1"
+  while [ $# != 1 ]; do
+    shift
+    local file="$1"
+    sed "$script" "$file" >"$file".tmp
+    mv -- "$file".tmp "$file"
+  done
+}
+
+unset TERMINFO TERMINFO_DIRS
+MKDIR="mkdir -p"
+
+if command -v mktemp >/dev/null 2>&1; then
+  WRKDIR="$(mktemp -d "${TMPDIR:-/tmp}"/dotlocal.XXXXXXXXXX)"
+else
+	WRKDIR="${TMPDIR:-/tmp}/dotlocal.$$"
+	$MKDIR -- "$WRKDIR"
+fi
+
+BIN_KERNEL=$(lowercase "$(uname -s)")
+case "$BIN_KERNEL" in
+  freebsd)
+    SHASUM="sha512 -r"
+    MAKE=gmake
+    TAR=tar
+    LOCALBASE="/usr/local"
+    ;;
+  *)
+    SHASUM=sha512sum
+    MAKE=make
+    TAR=/usr/bin/tar
+    LOCALBASE="/usr"
+  ;;
+esac
+BIN_ARCH=$(lowercase "$(uname -m)")
+case "$BIN_ARCH" in
+    armv6l)         BIN_CPU=armv6;;
+    armv7l)         BIN_CPU=armv7;;
+    arm64)          BIN_CPU=armv8;;
+    aarch64)        BIN_CPU=armv8-a;;
+    ppc64le)        BIN_CPU=powerpc64le;;
+    x86_64|amd64)
+    	BIN_CPU=x86-64
+        BIN_ARCH=amd64
+    ;;
+    i386|i586|i686) BIN_CPU="$BIN_ARCH";;
+    *)
+      >&2 echo '[error] unable to infer target CPU architecture'
+      exit 1
+    ;;
+esac
+USR_HOME="/root"
+PREFIX="$USR_HOME"/.local
+$MKDIR $PREFIX
+CIRRUS_WORKING_DIR=${CIRRUS_WORKING_DIR:-/tmp/cirrus-ci-build}
+$MKDIR $CIRRUS_WORKING_DIR
+CPUS="$(getconf _NPROCESSORS_ONLN)" || CPUS="$(sysctl -n hw.ncpu)" || CPUS=8
+DISTDIR="$WRKDIR/src"
+$MKDIR $DISTDIR
+
+COLOR_NONE="\033[0m"
+COLOR_RED="\033[0;31m"
+COLOR_GREEN="\033[0;32m"
+COLOR_YELLOW="\033[0;33m"
+COLOR_WHITE="\033[1;37m"
+
+ICMAKE_VERSION=9.03.01
+KAKOUNE_VERSION=2021.11.08
+KITTY_VERSION=0.23.1
+NCURSES_VERSION=6.3
+NEOVIM_VERSION=0.5.1
+YODL_VERSION=4.03.03
+ZSHELL_VERSION=5.8
+
+ICMAKE_URL=https://gitlab.com/fbb-git/icmake/-/archive/$ICMAKE_VERSION/icmake-$ICMAKE_VERSION.tar.gz
+KAKOUNE_URL=https://raw.githubusercontent.com/mawww/kakoune/v$KAKOUNE_VERSION/contrib/tmux-256color.terminfo
+KITTY_URL=https://raw.githubusercontent.com/kovidgoyal/kitty/v$KITTY_VERSION/terminfo/kitty.terminfo
+NCURSES_URL=https://invisible-mirror.net/archives/ncurses/ncurses-$NCURSES_VERSION.tar.gz
+NEOVIM_URL=https://github.com/neovim/neovim/archive/v$NEOVIM_VERSION.tar.gz
+NEOVIM_LINUX_URL=https://github.com/neovim/neovim/releases/download/v$NEOVIM_VERSION/nvim-linux64.tar.gz
+YODL_URL=https://gitlab.com/fbb-git/yodl/-/archive/$YODL_VERSION/yodl-$YODL_VERSION.tar.gz
+ZSHELL_URL=https://github.com/zsh-users/zsh/archive/zsh-$ZSHELL_VERSION.tar.gz
+
+ICMAKE_SHA512=2e6228c3bffa7fa145fd3743b1220d96b5730350718b91be96600cb24317e17aa5138282fe2f603d00dadd57d7a832ecff21a570eab0c21426f94d3208a61184
+KAKOUNE_SHA512=243c7e3dfd0f60e243b52af08d3bf331e6fd571413dadeaca572b43d1e8da3d0a8731bf24a5677373b122c30c1ba26b1955ff8400a3700cba1f18bb875461cf1
+KITTY_SHA512=2cdbbe50c72807f34e78a775b183e859c19634d8c0af10b7de28761354c5d3c24335a760c6efe15556c4b864fc5f59dac922a5e58bf8b532520763ee7a982d98
+NCURSES_SHA512=5373f228cba6b7869210384a607a2d7faecfcbfef6dbfcd7c513f4e84fbd8bcad53ac7db2e7e84b95582248c1039dcfc7c4db205a618f7da22a166db482f0105
+NEOVIM_SHA512=a5a976c4998e821e0d9a9038d3f0c9e7c424a951f6bfc6d75898916d6a004ac668f31a34c3472fc4fca6b1d9652ac662b06780dd04dc6a77ecdc81564ec05709
+NEOVIM_LINUX_SHA512=4b86c4f876629207a4ca8aff6853287cc7dc8a9133aa750b48bb9b7450cce357b97971eb85faf58eb0b9f3f20a927a5dcf5fd06e541ba7e882ccc4db33c12d6c
+YODL_SHA512=5ba3a70152e3820dc08e2da821f357ec00c1f0f500e52bc4cc5a36f5d4ea8cdc13d564f5678a306cfb621d30bc53dd85f6756a6bbfd6825f63237d9217deaf3b
+ZSHELL_SHA512=2474ccb34b4bd7689b2158ec064d5740ddc4eaf5c785006cb251b793a11433817f81250c63eea46801004563097018090eb6a4b4d2670a648ae8bf698eae53dd
+
+fetch() {
+  echo $(pwd)
+  local URL="$1"
+  local SHA512="$2"
+  local FILENAME="${URL##*/}"
+  local BASE="${FILENAME%.tar.gz}"
+  wget -nc -nv -O $DISTDIR/$FILENAME $URL
+  if [ "$SHA512" != "$($SHASUM $DISTDIR/$FILENAME | cut -d' ' -f1)" ]; then
+    echo -e "${COLOR_RED}SHA512 checksum mismatch, aborting!${COLOR_NONE}"
+    exit 1;
+  fi
+  $MKDIR $WRKDIR/$BASE
+  case "$DISTDIR/$FILENAME" in
+    *.tar.gz)
+      $TAR -xzf $DISTDIR/$FILENAME -C $WRKDIR/$BASE --strip-components 1
+      echo $(pwd)
+    ;;
+  esac
+}
+
+install_ncurses() {
+	cd -- "$WRKDIR"
+	fetch "$NCURSES_URL" "$NCURSES_SHA512"
+	cd ncurses-"$NCURSES_VERSION"
+	$MKDIR fake-bin
+	echo 'false' >fake-bin/ldconfig
+	chmod +x fake-bin/ldconfig
+	fake_bin_dir="$(pwd)"/fake-bin
+	PATH="$fake_bin_dir:$PATH" ./configure \
+	  --disable-pc-files \
+	  --disable-mixed-case \
+	  --disable-rpath \
+	  --disable-bsdpad \
+	  --disable-termcap \
+	  --disable-rpath-hack \
+	  --enable-root-environ \
+	  --enable-widec \
+	  --without-ada \
+	  --without-manpages \
+	  --without-tack \
+	  --without-tests \
+	  --without-pc-suffix \
+	  --without-pkg-config-libdir \
+	  --without-shared \
+	  --without-debug \
+	  --without-cxx-shared \
+	  --without-gmp \
+	  --without-dlsym \
+	  --without-pcre2 \
+	  --with-terminfo-dirs="/etc/terminfo:/usr/share/terminfo:/lib/terminfo:/usr/lib/terminfo"
+
+	$MAKE -j "$CPUS" install
+	cd -- "$WRKDIR"
+	fetch "$KITTY_URL" "$KITTY_SHA512"
+	tic -x -o "$USR_HOME"/.terminfo $DISTDIR/kitty.terminfo
+	cd -- "$WRKDIR"
+	fetch "$KAKOUNE_URL" "$KAKOUNE_SHA512"
+	tic -x -o "$USR_HOME"/.terminfo $DISTDIR/tmux-256color.terminfo
+}
+
+install_zsh() {
+  if [ "$BIN_KERNEL" = "linux" ]; then
+    if ! command -v yodl >/dev/null 2>&1; then
+      if ! command -v icmake >/dev/null 2>&1; then
+        cd -- "$WRKDIR"
+        fetch "$ICMAKE_URL" "$ICMAKE_SHA512"
+        cd icmake-"$ICMAKE_VERSION"/icmake
+        ./icm_prepare /
+        ./icm_bootstrap x
+        ./icm_install all
+      fi
+
+      cd -- "$WRKDIR"
+      fetch "$YODL_URL" "$YODL_SHA512"
+      cd yodl-"$YODL_VERSION"
+      $MKDIR fake-bin
+      touch fake-bin/tput
+      chmod +x fake-bin/tput
+      fake_bin_dir="$(pwd)"/fake-bin
+      cd yodl
+      PATH="$fake_bin_dir:$PATH" ./build programs
+      PATH="$fake_bin_dir:$PATH" ./build macros
+      PATH="$fake_bin_dir:$PATH" ./build install programs
+      PATH="$fake_bin_dir:$PATH" ./build install macros
+    fi
+  fi
+
+  cd -- "$WRKDIR"
+  fetch "$ZSHELL_URL" "$ZSHELL_SHA512"
+  cd zsh-$ZSHELL_VERSION
+
+  archflag="-march"
+
+  export CFLAGS="-Wall -Wmissing-prototypes $archflag=$BIN_CPU -DNDEBUG -O2 -flto -fno-strict-aliasing"
+  export LDFLAGS=
+  export EXELDFLAGS=
+  export LIBS=
+  export DLLDFLAGS="-shared"
+  export LDFLAGS="$CFLAGS $LDFLAGS"
+
+  EXELDFLAGS="$EXELDFLAGS -static"
+  LIBS="$LIBS -lpcre"
+  sed_i 's/armv\*/armv* | arm64/' config.sub
+
+  host="$(./config.guess)"
+  if [ -z "$host" -o -n "${host##*?-?*}" ]; then
+    >&2 echo "[error] unexpected output from ./config.guess: $host"
+    exit 1
+  fi
+
+  ./Util/preconfig
+  ./configure                          \
+    --prefix="$PREFIX"                 \
+    --disable-etcdir                   \
+    --disable-zshenv                   \
+    --disable-zshrc                    \
+    --disable-zlogin                   \
+    --disable-zprofile                 \
+    --disable-zlogout                  \
+    --disable-site-fndir               \
+    --disable-site-scriptdir           \
+    --enable-cap                       \
+    --enable-unicode9                  \
+    --with-tcsetpgrp                   \
+    --disable-dynamic                  \
+    --host="$BIN_ARCH-${host#*-}"      \
+    --enable-custom-patchlevel=zsh-5.8-0-g77d203f
+  
+  sed_i 's/link=no/link=static/' config.modules
+
+  if [ "$BIN_KERNEL" = "freebsd" ]; then
+    sed_i 's/attr.mdd link=static/attr.mdd link=no/' config.modules
+    sed_i 's/db_gdbm.mdd link=static/db_gdbm.mdd link=no/' config.modules
+  fi
+
+  $MAKE -j "$CPUS" install install.info
+
+  rsync -a --copy-links --copy-dirlinks -- "$PREFIX"/ "$PREFIX".tmp/
+  rm -r -- "$PREFIX"
+  mv -- "$PREFIX".tmp "$PREFIX"
+
+  cd -- "$PREFIX"
+
+  strip bin/zsh
+  rm -- bin/zsh-$ZSHELL_VERSION
+
+  cp -r -- share/man share/info ./
+
+  bin/zsh -fec 'zmodload zsh/stat; autoload -Uz add-zsh-hook; add-zsh-hook precmd x'
+
+  cat >&2 <<-END
+	-------------------------------------------------
+	SUCCESS: installed in $PREFIX.
+
+	This archive contains statically-linked, hermetic,
+	relocatable Zsh $ZSHELL_VERSION. Installation of Zsh from the archive
+	does not require libc, terminfo, ncurses or root access.
+	As long as the target machine has a compatible CPU and
+	kernel, it will work.
+
+	END
+  $PREFIX/bin/zsh --version
+}
+
+install_neovim() {
+	cd -- "$WRKDIR"
+	if [ "$BIN_KERNEL" = "freebsd" ]; then
+		fetch "$NEOVIM_URL" "$NEOVIM_SHA512"
+		mv v"$NEOVIM_VERSION" neovim-"$NEOVIM_VERSION"
+		cd -- neovim-"$NEOVIM_VERSION"
+		sed -i.bak -e '/libintl/s/ ON/ OFF/g; /libiconv/s/ ON/ OFF/g' CMakeLists.txt
+		printf 'message("Not using gettext")' > src/nvim/po/CMakeLists.txt
+		$MAKE CMAKE_BUILD_TYPE=Release CMAKE_INSTALL_PREFIX=$PREFIX install
+	elif [ "$BIN_KERNEL" = "linux" ]; then
+		fetch "$NEOVIM_LINUX_URL" "$NEOVIM_LINUX_SHA512"
+		cd -- nvim-linux64
+		cp -R * $PREFIX/
+	fi
+}
+
+if [ "$BIN_KERNEL" = "linux" ]; then
+	echo -e "${COLOR_GREEN} Building ncurses-$NCURSES_VERSION ..${COLOR_NONE}"
+	install_ncurses
+fi
+
+cd -- $CIRRUS_WORKING_DIR
+echo -e "${COLOR_GREEN} Building neovim-$NEOVIM_VERSION ..${COLOR_NONE}"
+install_neovim
+
+cd -- $CIRRUS_WORKING_DIR
+echo -e "${COLOR_GREEN} Building zsh-$ZSHELL_VERSION ..${COLOR_NONE}"
+install_zsh
+
+cd && $TAR -pPczf "$CIRRUS_WORKING_DIR"/dotlocal-"$BIN_KERNEL"-"$BIN_ARCH".tar.gz $USR_HOME
+
+cleanup

@@ -1,0 +1,36 @@
+task:
+        env:
+                CIRRUS_CLONE_DEPTH: 1
+                MAKEJOBS: "-j4"
+                PARALLEL_JOBS: "3"
+                INSTALL_PREFIX: "/home/bofh/.local"
+        matrix:
+                - name : freebsd13
+                  pkg_bootstrap_script:
+                        - mkdir -p /usr/local/etc/pkg/repos
+                        - cat /etc/pkg/FreeBSD.conf | sed -e 's/quarterly/latest/g' >> /usr/local/etc/pkg/repos/FreeBSD.conf
+                        - env ASSUME_ALWAYS_YES=yes pkg bootstrap -f
+                        - pkg update -f
+                        - pkg install -y autoconf automake binutils cmake gcc groff gmake libiconv libtool pcre pkgconf rsync texinfo wget yodl
+                  freebsd_instance:
+                        cpu: 8
+                        memory: 8G
+                        image_family: freebsd-13-0
+                - name : linux-amd64
+                  pkg_bootstrap_script:
+                        - apk update
+                        - apk upgrade
+                        - apk add autoconf automake bash cmake gcc gdbm-dev groff g++ libtool make mandoc musl-dev patch pcre-dev perl-utils rsync tar texinfo unzip util-linux
+                  container:
+                        image: amd64/alpine:latest
+                - name : linux-aarch64
+                  pkg_bootstrap_script:
+                        - apk update
+                        - apk upgrade
+                        - apk add autoconf automake bash cmake gcc gdbm-dev groff g++ libtool make mandoc musl-dev patch pcre-dev perl-utils rsync tar texinfo unzip util-linux
+                  arm_container:
+                        image: arm64v8/alpine:latest
+        build_script: ./build
+        binaries_artifacts:
+                path: "*.gz"
+# vim: sw=8 et:
